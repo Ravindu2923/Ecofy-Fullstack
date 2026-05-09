@@ -17,31 +17,85 @@ const getSLAAnalytics = async (req, res) => {
       });
     }
 
-    // ── Overview KPIs ──────────────────────────────────
-    const completed = allRequests.filter((r) => r.status === "Completed").length;
-    const delayed = allRequests.filter((r) => r.status === "Delayed").length;
-    const pending = allRequests.filter((r) => r.status === "Pending").length;
-    const inProgress = allRequests.filter((r) => r.status === "In Progress").length;
-    const assigned = allRequests.filter((r) => r.status === "Assigned").length;
+    let completed = 0, delayed = 0, pending = 0, inProgress = 0, assigned = 0;
+    let completedTotalDays = 0, completedWithDatesCount = 0;
+
+    const dailyMap = {};
+    const wasteMap = {};
+    const locMap = {};
+    const serviceMap = {};
+
+    // Single pass iteration
+    for (let i = 0; i < total; i++) {
+      const r = allRequests[i];
+      const { status, scheduled_date, createdAt, waste_category, location, service_type } = r;
+
+      // 1. Overview KPIs
+      if (status === "Completed") {
+        completed++;
+        if (createdAt && scheduled_date) {
+          const created = new Date(createdAt);
+          const scheduled = new Date(scheduled_date);
+          completedTotalDays += Math.abs(scheduled - created) / (1000 * 60 * 60 * 24);
+          completedWithDatesCount++;
+        }
+      } else if (status === "Delayed") {
+        delayed++;
+      } else if (status === "Pending") {
+        pending++;
+      } else if (status === "In Progress") {
+        inProgress++;
+      } else if (status === "Assigned") {
+        assigned++;
+      }
+
+      // 2. Daily Completion Trend
+      if (scheduled_date) {
+        const date = new Date(scheduled_date).toISOString().split("T")[0];
+        if (!dailyMap[date]) {
+          dailyMap[date] = { date, completed: 0, total: 0, delayed: 0 };
+        }
+        dailyMap[date].total += 1;
+        if (status === "Completed") dailyMap[date].completed += 1;
+        if (status === "Delayed") dailyMap[date].delayed += 1;
+      }
+
+      // 3. Waste Category Breakdown
+      if (waste_category) {
+        wasteMap[waste_category] = (wasteMap[waste_category] || 0) + 1;
+      }
+
+      // 4. Location Performance
+      if (location) {
+        if (!locMap[location]) {
+          locMap[location] = { location, total: 0, completed: 0, delayed: 0, pending: 0 };
+        }
+        locMap[location].total += 1;
+        if (status === "Completed") locMap[location].completed += 1;
+        if (status === "Delayed") locMap[location].delayed += 1;
+        if (status === "Pending") locMap[location].pending += 1;
+      }
+
+      // 5. Service Type Analysis
+      if (service_type) {
+        if (!serviceMap[service_type]) {
+          serviceMap[service_type] = { name: service_type, total: 0, completed: 0, delayed: 0 };
+        }
+        serviceMap[service_type].total += 1;
+        if (status === "Completed") serviceMap[service_type].completed += 1;
+        if (status === "Delayed") serviceMap[service_type].delayed += 1;
+      }
+    }
 
     const completionRate = Math.round((completed / total) * 100);
     const delayRate = Math.round((delayed / total) * 100);
-    const onTimeRate = total - delayed > 0 ? Math.round(((completed) / (completed + delayed)) * 100) : 0;
+    const onTimeRate = total - delayed > 0 ? Math.round((completed / (completed + delayed)) * 100) : 0;
 
-    // Average response time (days between createdAt and scheduled_date for completed requests)
-    const completedRequests = allRequests.filter((r) => r.status === "Completed" && r.createdAt && r.scheduled_date);
     let avgResponseDays = 0;
-    if (completedRequests.length > 0) {
-      const totalDays = completedRequests.reduce((sum, r) => {
-        const created = new Date(r.createdAt);
-        const scheduled = new Date(r.scheduled_date);
-        const diff = Math.abs(scheduled - created) / (1000 * 60 * 60 * 24);
-        return sum + diff;
-      }, 0);
-      avgResponseDays = Math.round((totalDays / completedRequests.length) * 10) / 10;
+    if (completedWithDatesCount > 0) {
+      avgResponseDays = Math.round((completedTotalDays / completedWithDatesCount) * 10) / 10;
     }
 
-    // ── Status Distribution ────────────────────────────
     const statusDistribution = [
       { name: "Pending", value: pending, color: "#f59e0b" },
       { name: "Assigned", value: assigned, color: "#3b82f6" },
@@ -50,17 +104,6 @@ const getSLAAnalytics = async (req, res) => {
       { name: "Delayed", value: delayed, color: "#ef4444" },
     ].filter((s) => s.value > 0);
 
-    // ── Daily Completion Trend ─────────────────────────
-    const dailyMap = {};
-    allRequests.forEach((r) => {
-      const date = new Date(r.scheduled_date).toISOString().split("T")[0];
-      if (!dailyMap[date]) {
-        dailyMap[date] = { date, completed: 0, total: 0, delayed: 0 };
-      }
-      dailyMap[date].total += 1;
-      if (r.status === "Completed") dailyMap[date].completed += 1;
-      if (r.status === "Delayed") dailyMap[date].delayed += 1;
-    });
     const dailyCompletion = Object.values(dailyMap)
       .sort((a, b) => a.date.localeCompare(b.date))
       .map((d) => ({
@@ -69,11 +112,6 @@ const getSLAAnalytics = async (req, res) => {
         date: new Date(d.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
       }));
 
-    // ── Waste Category Breakdown ───────────────────────
-    const wasteMap = {};
-    allRequests.forEach((r) => {
-      wasteMap[r.waste_category] = (wasteMap[r.waste_category] || 0) + 1;
-    });
     const wasteCategoryColors = {
       General: "#3b82f6",
       Recyclable: "#10b981",
@@ -87,17 +125,6 @@ const getSLAAnalytics = async (req, res) => {
       color: wasteCategoryColors[name] || "#6b7280",
     }));
 
-    // ── Location Performance ──────────────────────────
-    const locMap = {};
-    allRequests.forEach((r) => {
-      if (!locMap[r.location]) {
-        locMap[r.location] = { location: r.location, total: 0, completed: 0, delayed: 0, pending: 0 };
-      }
-      locMap[r.location].total += 1;
-      if (r.status === "Completed") locMap[r.location].completed += 1;
-      if (r.status === "Delayed") locMap[r.location].delayed += 1;
-      if (r.status === "Pending") locMap[r.location].pending += 1;
-    });
     const locationPerformance = Object.values(locMap)
       .map((loc) => ({
         ...loc,
@@ -105,16 +132,6 @@ const getSLAAnalytics = async (req, res) => {
       }))
       .sort((a, b) => b.total - a.total);
 
-    // ── Service Type Analysis ─────────────────────────
-    const serviceMap = {};
-    allRequests.forEach((r) => {
-      if (!serviceMap[r.service_type]) {
-        serviceMap[r.service_type] = { name: r.service_type, total: 0, completed: 0, delayed: 0 };
-      }
-      serviceMap[r.service_type].total += 1;
-      if (r.status === "Completed") serviceMap[r.service_type].completed += 1;
-      if (r.status === "Delayed") serviceMap[r.service_type].delayed += 1;
-    });
     const serviceTypeColors = {
       Household: "#3b82f6",
       Commercial: "#10b981",
