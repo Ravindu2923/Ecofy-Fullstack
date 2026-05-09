@@ -14,7 +14,7 @@ const getPaymentHistory = async (req, res) => {
       paymentHistory: records,
     });
   } catch (err) {
-    console.log(err);
+    console.error(err);
     res.status(500).json({ message: "Internal server error" });
   }
 };
@@ -26,7 +26,7 @@ const createPaymentHistory = async (req, res) => {
     await record.save();
     res.status(201).json({ message: "Payment record created", record });
   } catch (err) {
-    console.log(err);
+    console.error(err);
     res.status(500).json({ message: "Internal server error" });
   }
 };
